@@ -1,10 +1,10 @@
 - name: Download ngrok.
-      run: |
+      run
        Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
         Invoke-WebRequest https://raw.githubusercontent.com/baronkula/apasaja/main/mulai.bat -OutFile mulai.bat
         Invoke-WebRequest https://raw.githubusercontent.com/baronkula/apasaja/main/up.bat -OutFile up.bat
         Invoke-WebRequest https://raw.githubusercontent.com/baronkula/apasaja/main/looping.bat -OutFile looping.bat
-    - name: Mengextrak File Ngrok.
+    - name: Mengextrak File Ngrok . 
       run: Expand-Archive ngrok.zip
     - name: Connect ke ngrok.
       run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
