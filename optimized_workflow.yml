@@ -1,0 +1,175 @@
+name: Optimized RDP Setup
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'NGROK region (us, eu, ap, au, sa, jp, in)'
+        required: false
+        default: 'ap'
+        type: choice
+        options: ['us', 'eu', 'ap', 'au', 'sa', 'jp', 'in']
+
+jobs:
+  setup-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup PowerShell execution policy
+      run: Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+      
+    - name: Cache downloads
+      uses: actions/cache@v3
+      id: cache-downloads
+      with:
+        path: |
+          ngrok.zip
+          AnyDesk.exe
+        key: rdp-tools-v1
+        
+    - name: Download tools in parallel (if not cached)
+      if: steps.cache-downloads.outputs.cache-hit != 'true'
+      run: |
+        # Download multiple files in parallel using background jobs
+        $jobs = @()
+        
+        $jobs += Start-Job -ScriptBlock {
+          Invoke-WebRequest "https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip" -OutFile "ngrok.zip" -UseBasicParsing
+        }
+        
+        $jobs += Start-Job -ScriptBlock {
+          Invoke-WebRequest "https://download.anydesk.com/AnyDesk.exe" -OutFile "AnyDesk.exe" -UseBasicParsing
+        }
+        
+        # Wait for all downloads to complete with timeout
+        $timeout = 300 # 5 minutes
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        
+        while ($jobs | Where-Object { $_.State -eq 'Running' }) {
+          if ($timer.Elapsed.TotalSeconds -gt $timeout) {
+            $jobs | Stop-Job
+            throw "Download timeout exceeded"
+          }
+          Start-Sleep -Seconds 2
+        }
+        
+        # Check for errors
+        foreach ($job in $jobs) {
+          if ($job.State -eq 'Failed') {
+            Receive-Job $job
+            throw "Download job failed"
+          }
+        }
+        
+        # Clean up jobs
+        $jobs | Remove-Job
+        
+        Write-Host "All downloads completed successfully"
+        
+    - name: Extract and setup NGROK
+      run: |
+        if (Test-Path "ngrok.zip") {
+          Expand-Archive "ngrok.zip" -DestinationPath "ngrok" -Force
+          Write-Host "NGROK extracted successfully"
+        } else {
+          throw "NGROK zip file not found"
+        }
+        
+    - name: Configure NGROK with optimized settings
+      run: |
+        # Create NGROK config for better performance
+        $config = @"
+        version: "2"
+        authtoken: $env:NGROK_AUTH_TOKEN
+        region: ${{ github.event.inputs.region || 'ap' }}
+        console_ui: false
+        log_level: warn
+        log_format: json
+        tunnels:
+          rdp:
+            addr: 3389
+            proto: tcp
+            region: ${{ github.event.inputs.region || 'ap' }}
+        "@
+        
+        $configPath = "$env:USERPROFILE\.ngrok2\ngrok.yml"
+        $configDir = Split-Path $configPath -Parent
+        
+        if (!(Test-Path $configDir)) {
+          New-Item -ItemType Directory -Path $configDir -Force
+        }
+        
+        $config | Out-File -FilePath $configPath -Encoding UTF8
+        Write-Host "NGROK configured with optimized settings"
+      env:
+        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        
+    - name: Configure RDP with security optimizations
+      run: |
+        # Batch RDP configuration for better performance
+        $rdpConfigs = @(
+          @{ Path = 'HKLM:\System\CurrentControlSet\Control\Terminal Server'; Name = 'fDenyTSConnections'; Value = 0 },
+          @{ Path = 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'; Name = 'UserAuthentication'; Value = 1 },
+          @{ Path = 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'; Name = 'SecurityLayer'; Value = 1 },
+          @{ Path = 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'; Name = 'MinEncryptionLevel'; Value = 3 }
+        )
+        
+        foreach ($config in $rdpConfigs) {
+          try {
+            Set-ItemProperty -Path $config.Path -Name $config.Name -Value $config.Value -Force
+            Write-Host "Set $($config.Name) = $($config.Value)"
+          } catch {
+            Write-Warning "Failed to set $($config.Name): $($_.Exception.Message)"
+          }
+        }
+        
+        # Enable firewall rules
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+        
+        # Copy AnyDesk to desktop
+        if (Test-Path "AnyDesk.exe") {
+          Copy-Item "AnyDesk.exe" -Destination "C:\Users\Public\Desktop\AnyDesk.exe" -Force
+        }
+        
+        Write-Host "RDP configuration completed"
+        
+    - name: Start NGROK tunnel
+      run: |
+        Write-Host "Starting NGROK tunnel..."
+        Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "start", "rdp" -WindowStyle Hidden
+        
+        # Wait for tunnel to establish with timeout
+        $timeout = 60
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        
+        do {
+          Start-Sleep -Seconds 2
+          $ngrokRunning = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+          
+          if ($timer.Elapsed.TotalSeconds -gt $timeout) {
+            throw "NGROK tunnel failed to start within timeout"
+          }
+        } while (-not $ngrokRunning)
+        
+        Write-Host "NGROK tunnel started successfully"
+        
+    - name: Initialize system
+      run: |
+        if (Test-Path "mulai_optimized.bat") {
+          cmd /c mulai_optimized.bat
+        } else {
+          # Fallback to original if optimized version doesn't exist
+          cmd /c mulai.bat
+        }
+        
+    - name: Keep session alive
+      run: |
+        if (Test-Path "looping_optimized.bat") {
+          cmd /c looping_optimized.bat
+        } else {
+          # Fallback to original if optimized version doesn't exist
+          cmd /c looping.bat
+        }
